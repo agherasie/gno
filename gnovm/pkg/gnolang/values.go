@@ -20,6 +20,18 @@ import (
 type Value interface {
 	assertValue()
 	String() string // for debugging
+
+	// DeepFill returns the same value, filled.
+	//
+	// NOTE NOT LAZY (and potentially expensive)
+	// DeepFill() is only used for synchronous recursive
+	// filling before running genstd generated native bindings
+	// which use Gno2GoValue().  All other filling functionality is
+	// lazy, so avoid using this, and keep the logic lazy.
+	//
+	// NOTE must use the return value since PointerValue isn't a pointer
+	// receiver, and RefValue returns another type entirely.
+	DeepFill(store Store) Value
 }
 
 // Fixed size primitive types are represented in TypedValue.N
@@ -79,26 +91,26 @@ type BigintValue struct {
 	V *big.Int
 }
 
-func (bv BigintValue) MarshalAmino() (string, error) {
-	bz, err := bv.V.MarshalText()
+func (biv BigintValue) MarshalAmino() (string, error) {
+	bz, err := biv.V.MarshalText()
 	if err != nil {
 		return "", err
 	}
 	return string(bz), nil
 }
 
-func (bv *BigintValue) UnmarshalAmino(s string) error {
+func (biv *BigintValue) UnmarshalAmino(s string) error {
 	vv := big.NewInt(0)
 	err := vv.UnmarshalText([]byte(s))
 	if err != nil {
 		return err
 	}
-	bv.V = vv
+	biv.V = vv
 	return nil
 }
 
-func (bv BigintValue) Copy(alloc *Allocator) BigintValue {
-	return BigintValue{V: big.NewInt(0).Set(bv.V)}
+func (biv BigintValue) Copy(alloc *Allocator) BigintValue {
+	return BigintValue{V: big.NewInt(0).Set(biv.V)}
 }
 
 // ----------------------------------------
@@ -108,27 +120,27 @@ type BigdecValue struct {
 	V *apd.Decimal
 }
 
-func (bv BigdecValue) MarshalAmino() (string, error) {
-	bz, err := bv.V.MarshalText()
+func (bdv BigdecValue) MarshalAmino() (string, error) {
+	bz, err := bdv.V.MarshalText()
 	if err != nil {
 		return "", err
 	}
 	return string(bz), nil
 }
 
-func (bv *BigdecValue) UnmarshalAmino(s string) error {
+func (bdv *BigdecValue) UnmarshalAmino(s string) error {
 	vv := apd.New(0, 0)
 	err := vv.UnmarshalText([]byte(s))
 	if err != nil {
 		return err
 	}
-	bv.V = vv
+	bdv.V = vv
 	return nil
 }
 
-func (bv BigdecValue) Copy(alloc *Allocator) BigdecValue {
+func (bdv BigdecValue) Copy(alloc *Allocator) BigdecValue {
 	cp := apd.New(0, 0)
-	_, err := apd.BaseContext.Add(cp, cp, bv.V)
+	_, err := apd.BaseContext.Add(cp, cp, bdv.V)
 	if err != nil {
 		panic("should not happen")
 	}
@@ -1116,7 +1128,7 @@ func (tv *TypedValue) PrimitiveBytes() (data []byte) {
 	case UintType, Uint64Type:
 		data = make([]byte, 8)
 		binary.LittleEndian.PutUint64(
-			data, uint64(tv.GetUint()))
+			data, tv.GetUint())
 		return data
 	case Float32Type:
 		data = make([]byte, 4)
@@ -1130,8 +1142,6 @@ func (tv *TypedValue) PrimitiveBytes() (data []byte) {
 		binary.LittleEndian.PutUint64(
 			data, u64)
 		return data
-	case BigintType:
-		return tv.V.(BigintValue).V.Bytes()
 	default:
 		panic(fmt.Sprintf(
 			"unexpected primitive value type: %s",
@@ -1190,7 +1200,7 @@ func (tv *TypedValue) GetString() string {
 	return string(tv.V.(StringValue))
 }
 
-func (tv *TypedValue) SetInt(n int) {
+func (tv *TypedValue) SetInt(n int64) {
 	if debug {
 		if tv.T.Kind() != IntKind || isNative(tv.T) {
 			panic(fmt.Sprintf(
@@ -1198,19 +1208,16 @@ func (tv *TypedValue) SetInt(n int) {
 				tv.T.String()))
 		}
 	}
-	// XXX probably should be coerced into int64 for determinism.
-	// XXX otherwise, all nodes must run in 64bit.
-	// XXX alternatively, require 64bit.
-	*(*int)(unsafe.Pointer(&tv.N)) = n
+	*(*int64)(unsafe.Pointer(&tv.N)) = n
 }
 
-func (tv *TypedValue) ConvertGetInt() int {
+func (tv *TypedValue) ConvertGetInt() int64 {
 	var store Store = nil // not used
 	ConvertTo(nilAllocator, store, tv, IntType, false)
 	return tv.GetInt()
 }
 
-func (tv *TypedValue) GetInt() int {
+func (tv *TypedValue) GetInt() int64 {
 	if debug {
 		if tv.T != nil && tv.T.Kind() != IntKind {
 			panic(fmt.Sprintf(
@@ -1218,7 +1225,7 @@ func (tv *TypedValue) GetInt() int {
 				tv.T.String()))
 		}
 	}
-	return *(*int)(unsafe.Pointer(&tv.N))
+	return *(*int64)(unsafe.Pointer(&tv.N))
 }
 
 func (tv *TypedValue) SetInt8(n int8) {
@@ -1309,7 +1316,7 @@ func (tv *TypedValue) GetInt64() int64 {
 	return *(*int64)(unsafe.Pointer(&tv.N))
 }
 
-func (tv *TypedValue) SetUint(n uint) {
+func (tv *TypedValue) SetUint(n uint64) {
 	if debug {
 		if tv.T.Kind() != UintKind || isNative(tv.T) {
 			panic(fmt.Sprintf(
@@ -1317,10 +1324,10 @@ func (tv *TypedValue) SetUint(n uint) {
 				tv.T.String()))
 		}
 	}
-	*(*uint)(unsafe.Pointer(&tv.N)) = n
+	*(*uint64)(unsafe.Pointer(&tv.N)) = n
 }
 
-func (tv *TypedValue) GetUint() uint {
+func (tv *TypedValue) GetUint() uint64 {
 	if debug {
 		if tv.T != nil && tv.T.Kind() != UintKind {
 			panic(fmt.Sprintf(
@@ -1328,7 +1335,7 @@ func (tv *TypedValue) GetUint() uint {
 				tv.T.String()))
 		}
 	}
-	return *(*uint)(unsafe.Pointer(&tv.N))
+	return *(*uint64)(unsafe.Pointer(&tv.N))
 }
 
 func (tv *TypedValue) SetUint8(n uint8) {
@@ -1563,6 +1570,7 @@ func (tv *TypedValue) ComputeMapKey(store Store, omitType bool) MapKey {
 		pbz := tv.PrimitiveBytes()
 		bz = append(bz, pbz...)
 	case *PointerType:
+		fillValueTV(store, tv)
 		ptr := uintptr(unsafe.Pointer(tv.V.(PointerValue).TV))
 		bz = append(bz, uintptrToBytes(&ptr)...)
 	case FieldType:
@@ -1669,7 +1677,7 @@ func (tv *TypedValue) GetPointerToFromTV(alloc *Allocator, store Store, path Val
 			dtv = tv
 		case 1:
 			dtv = tv
-			path.Depth = 0
+			path.SetDepth(0)
 		default:
 			panic("should not happen")
 		}
@@ -1681,15 +1689,15 @@ func (tv *TypedValue) GetPointerToFromTV(alloc *Allocator, store Store, path Val
 		case 1:
 			dtv = tv.V.(PointerValue).TV
 			isPtr = true
-			path.Depth = 0
+			path.SetDepth(0)
 		case 2:
 			dtv = tv.V.(PointerValue).TV
 			isPtr = true
-			path.Depth = 0
+			path.SetDepth(0)
 		case 3:
 			dtv = tv.V.(PointerValue).TV
 			isPtr = true
-			path.Depth = 0
+			path.SetDepth(0)
 		default:
 			panic("should not happen")
 		}
@@ -1703,7 +1711,7 @@ func (tv *TypedValue) GetPointerToFromTV(alloc *Allocator, store Store, path Val
 			dtv = tv.V.(PointerValue).TV
 			isPtr = true
 			path.Type = VPField
-			path.Depth = 0
+			path.SetDepth(0)
 		case 2:
 			if tv.V == nil {
 				panic(&Exception{Value: typedString("nil pointer dereference")})
@@ -1711,16 +1719,19 @@ func (tv *TypedValue) GetPointerToFromTV(alloc *Allocator, store Store, path Val
 			dtv = tv.V.(PointerValue).TV
 			isPtr = true
 			path.Type = VPField
-			path.Depth = 0
+			path.SetDepth(0)
 		case 3:
 			dtv = tv.V.(PointerValue).TV
 			isPtr = true
 			path.Type = VPField
-			path.Depth = 0
+			path.SetDepth(0)
 		default:
 			panic("should not happen")
 		}
 	case VPDerefValMethod:
+		if tv.V == nil {
+			panic(&Exception{Value: typedString("nil pointer dereference")})
+		}
 		dtv2 := tv.V.(PointerValue).TV
 		dtv = &TypedValue{ // In case method is called on converted type, like ((*othertype)x).Method().
 			T: tv.T.Elem(),
@@ -1970,7 +1981,7 @@ func (tv *TypedValue) GetPointerToFromTV(alloc *Allocator, store Store, path Val
 // Convenience for GetPointerAtIndex().  Slow.
 func (tv *TypedValue) GetPointerAtIndexInt(store Store, ii int) PointerValue {
 	iv := TypedValue{T: IntType}
-	iv.SetInt(ii)
+	iv.SetInt(int64(ii))
 	return tv.GetPointerAtIndex(nilAllocator, store, &iv)
 }
 
@@ -1979,7 +1990,7 @@ func (tv *TypedValue) GetPointerAtIndex(alloc *Allocator, store Store, iv *Typed
 	case PrimitiveType:
 		if bt == StringType || bt == UntypedStringType {
 			sv := tv.GetString()
-			ii := iv.ConvertGetInt()
+			ii := int(iv.ConvertGetInt())
 			bv := &TypedValue{ // heap alloc
 				T: Uint8Type,
 			}
@@ -2002,14 +2013,14 @@ func (tv *TypedValue) GetPointerAtIndex(alloc *Allocator, store Store, iv *Typed
 			tv.T.String()))
 	case *ArrayType:
 		av := tv.V.(*ArrayValue)
-		ii := iv.ConvertGetInt()
+		ii := int(iv.ConvertGetInt())
 		return av.GetPointerAtIndexInt2(store, ii, bt.Elt)
 	case *SliceType:
 		if tv.V == nil {
 			panic("nil slice index (out of bounds)")
 		}
 		sv := tv.V.(*SliceValue)
-		ii := iv.ConvertGetInt()
+		ii := int(iv.ConvertGetInt())
 		return sv.GetPointerAtIndexInt2(store, ii, bt.Elt)
 	case *MapType:
 		if tv.V == nil {
@@ -2031,7 +2042,7 @@ func (tv *TypedValue) GetPointerAtIndex(alloc *Allocator, store Store, iv *Typed
 		rv := nv.Value
 		switch rt.Kind() {
 		case reflect.Array, reflect.Slice, reflect.String:
-			ii := iv.ConvertGetInt()
+			ii := int(iv.ConvertGetInt())
 			erv := rv.Index(ii)
 			etv := go2GnoValue(alloc, erv)
 			return PointerValue{
@@ -2093,6 +2104,8 @@ func (tv *TypedValue) GetLength() int {
 		case *ArrayType:
 			return bt.Len
 		case *SliceType:
+			return 0
+		case *MapType:
 			return 0
 		case *PointerType:
 			if at, ok := bt.Elt.(*ArrayType); ok {
@@ -2322,6 +2335,14 @@ func (tv *TypedValue) GetSlice2(alloc *Allocator, lowVal, highVal, maxVal int) T
 	default:
 		panic(fmt.Sprintf("unexpected type for GetSlice2(): %s",
 			tv.T.String()))
+	}
+}
+
+// Convenience for Value.DeepFill.
+// NOTE: NOT LAZY (and potentially expensive)
+func (tv *TypedValue) DeepFill(store Store) {
+	if tv.V != nil {
+		tv.V = tv.V.DeepFill(store)
 	}
 }
 
@@ -2653,7 +2674,7 @@ func defaultTypedValue(alloc *Allocator, t Type) TypedValue {
 
 func typedInt(i int) TypedValue {
 	tv := TypedValue{T: IntType}
-	tv.SetInt(i)
+	tv.SetInt(int64(i))
 	return tv
 }
 

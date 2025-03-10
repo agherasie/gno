@@ -19,7 +19,6 @@ var (
 
 	githubUrl        string
 	linkedinUrl      string
-	connectUrl       string
 	imageUpdatePrice int64
 
 	isValidUrl func(string) bool
@@ -75,7 +74,7 @@ func UpdateSelectedImage(url string) {
 		panic("Url is not valid!")
 	}
 
-	sentCoins := std.GetOrigSend()
+	sentCoins := std.OriginSend()
 
 	if len(sentCoins) != 1 && sentCoins.AmountOf("ugnot") == imageUpdatePrice {
 		panic("Please send exactly " + strconv.Itoa(int(imageUpdatePrice)) + " ugnot")

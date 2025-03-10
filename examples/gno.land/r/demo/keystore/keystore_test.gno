@@ -56,13 +56,13 @@ func TestRender(t *testing.T) {
 		p := ""
 		if len(tc.ps) > 0 {
 			p = tc.owner.String()
-			for i, psv := range tc.ps {
+			for _, psv := range tc.ps {
 				p += ":" + psv
 			}
 		}
 		p = strings.TrimSuffix(p, ":")
 		t.Run(p, func(t *testing.T) {
-			std.TestSetOrigCaller(tc.caller)
+			std.TestSetOriginCaller(tc.caller)
 			var act string
 			if len(tc.ps) > 0 && tc.ps[0] == "set" {
 				act = strings.TrimSpace(Set(tc.ps[1], tc.ps[2]))
